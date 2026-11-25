@@ -20,8 +20,6 @@ def remove_nulls(s):
     Technically, this means the data in postgres won't be an exact match of the data in twitter,
     and there is no way to get the original twitter data back from the data in postgres.
 
-    The null character is extremely rarely used in real world text (approx. 1 in 1 billion tweets),
-    and so this isn't too big of a deal.
     A more correct implementation, however, would be to *escape* the null characters rather than remove them.
     This isn't hard to do in python, but it is a bit of a pain to do with the JSON/COPY commands for the denormalized data.
     Since our goal is for the normalized/denormalized versions of the data to match exactly,
@@ -36,33 +34,6 @@ def remove_nulls(s):
         return None
     else:
         return s.replace('\x00','\\x00')
-
-
-def get_id_urls(url):
-    '''
-    Given a url, returns the corresponding id in the urls table.
-    If no row exists for the url, then one is inserted automatically.
-    '''
-    sql = sqlalchemy.sql.text('''
-    insert into urls 
-        (url)
-        values
-        (:url)
-    on conflict do nothing
-    returning id_urls
-    ;
-    ''')
-    res = connection.execute(sql,{'url':url}).first()
-    if res is None:
-        sql = sqlalchemy.sql.text('''
-        select id_urls 
-        from urls
-        where
-            url=:url
-        ''')
-        res = connection.execute(sql,{'url':url}).first()
-    id_urls = res[0]
-    return id_urls
 
 
 def batch(iterable, n=1):
@@ -206,10 +177,6 @@ def _insert_tweets(connection,input_tweets):
         ########################################
         # insert into the users table
         ########################################
-        if tweet['user']['url'] is None:
-            user_id_urls = None
-        else:
-            user_id_urls = get_id_urls(tweet['user']['url'])
 
         users.append({
             'id_users':tweet['user']['id'],
@@ -218,7 +185,7 @@ def _insert_tweets(connection,input_tweets):
             'screen_name':remove_nulls(tweet['user']['screen_name']),
             'name':remove_nulls(tweet['user']['name']),
             'location':remove_nulls(tweet['user']['location']),
-            'id_urls':user_id_urls,
+            'url':tweet['user']['url'],
             'description':remove_nulls(tweet['user']['description']),
             'protected':tweet['user']['protected'],
             'verified':tweet['user']['verified'],
@@ -321,11 +288,10 @@ def _insert_tweets(connection,input_tweets):
         except KeyError:
             urls = tweet['entities']['urls']
 
-        for url in urls:
-            id_urls = get_id_urls(url['expanded_url'])
+        for url in dict.fromkeys(url['expanded_url'] for url in urls):
             tweet_urls.append({
                 'id_tweets':tweet['id'],
-                'id_urls':id_urls,
+                'url':url,
                 })
 
         ########################################
@@ -362,7 +328,7 @@ def _insert_tweets(connection,input_tweets):
 
         tags = [ '#'+hashtag['text'] for hashtag in hashtags ] + [ '$'+cashtag['text'] for cashtag in cashtags ]
 
-        for tag in tags:
+        for tag in dict.fromkeys(tags):
             tweet_tags.append({
                 'id_tweets':tweet['id'],
                 'tag':remove_nulls(tag)
@@ -380,11 +346,11 @@ def _insert_tweets(connection,input_tweets):
             except KeyError:
                 media = []
 
+        media = list({ m['media_url']:m for m in reversed(media) }.values())[::-1]
         for medium in media:
-            id_urls = get_id_urls(medium['media_url'])
             tweet_media.append({
                 'id_tweets':tweet['id'],
-                'id_urls':id_urls,
+                'url':medium['media_url'],
                 'type':medium['type']
                 })
 
